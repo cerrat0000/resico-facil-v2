@@ -484,7 +484,7 @@ const Declarations = () => {
             </div>
           </div>
           {!currentCalc && (
-            <Button size="lg" className="w-full h-12" onClick={handleCalculate} disabled={calculate.isPending}>
+            <Button type="button" size="lg" className="w-full h-12" onClick={handleCalculate} disabled={calculate.isPending}>
               {calculate.isPending ? (
                 <>
                   <Loader2 size={18} className="animate-spin" /> Calculando…

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/contexts/AuthContext";
+import { useProxy } from "@/contexts/ProxyContext";
 import { getStripeEnvironment } from "@/lib/stripe";
 
 export interface StripeSubscription {
@@ -17,12 +17,12 @@ export interface StripeSubscription {
 }
 
 export function useSubscription() {
-  const { user } = useAuth();
+  const { effectiveUserId } = useProxy();
   const [subscription, setSubscription] = useState<StripeSubscription | null>(null);
   const [loading, setLoading] = useState(true);
 
   const refetch = useCallback(async () => {
-    if (!user) {
+    if (!effectiveUserId) {
       setSubscription(null);
       setLoading(false);
       return;
@@ -30,30 +30,30 @@ export function useSubscription() {
     const { data } = await supabase
       .from("subscriptions")
       .select("*")
-      .eq("user_id", user.id)
+      .eq("user_id", effectiveUserId)
       .eq("environment", getStripeEnvironment())
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
     setSubscription((data as StripeSubscription) ?? null);
     setLoading(false);
-  }, [user]);
+  }, [effectiveUserId]);
 
   useEffect(() => {
     refetch();
-    if (!user) return;
+    if (!effectiveUserId) return;
     const channel = supabase
-      .channel(`sub-${user.id}`)
+      .channel(`sub-${effectiveUserId}`)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "subscriptions", filter: `user_id=eq.${user.id}` },
+        { event: "*", schema: "public", table: "subscriptions", filter: `user_id=eq.${effectiveUserId}` },
         () => refetch(),
       )
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user, refetch]);
+  }, [effectiveUserId, refetch]);
 
   const isActive = !!subscription && (
     (["active", "trialing", "past_due"].includes(subscription.status) &&

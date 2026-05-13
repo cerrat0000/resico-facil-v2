@@ -51,6 +51,8 @@ export const useAccountantClients = () => {
         };
       });
     },
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    gcTime: 1000 * 60 * 15, // 15 minutes
   });
 
   const inviteByRfc = useMutation({
@@ -80,7 +82,29 @@ export const useAccountantClients = () => {
       if (data && typeof data === "object" && "error" in data) throw new Error((data as any).error);
       return data;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["accountant_clients", user?.id] }),
+    onMutate: async ({ linkId, canEdit }) => {
+      await qc.cancelQueries({ queryKey: ["accountant_clients", user?.id] });
+      const previousClients = qc.getQueryData<AccountantClientRow[]>(["accountant_clients", user?.id]);
+      if (previousClients) {
+        qc.setQueryData<AccountantClientRow[]>(
+          ["accountant_clients", user?.id],
+          previousClients.map((client) =>
+            client.id === linkId
+              ? { ...client, canEdit, permissions: { ...client.permissions, edit: canEdit, read: true, documents: true } }
+              : client
+          )
+        );
+      }
+      return { previousClients };
+    },
+    onError: (_err, _newVal, context) => {
+      if (context?.previousClients) {
+        qc.setQueryData(["accountant_clients", user?.id], context.previousClients);
+      }
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["accountant_clients", user?.id] });
+    },
   });
 
   return { ...list, inviteByRfc, setEditPermission };
@@ -116,6 +140,8 @@ export const usePendingInvitations = () => {
         license_number: accProfs?.find((p) => p.user_id === l.accountant_id)?.license_number ?? null,
       }));
     },
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 15,
   });
 
   const respond = useMutation({

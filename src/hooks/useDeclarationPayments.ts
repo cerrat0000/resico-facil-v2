@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
-import { useAuth } from '@/contexts/AuthContext';
+import { useProxy } from '@/contexts/ProxyContext';
 import { getStripeEnvironment } from '@/lib/stripe';
 
 export const useCreateDeclarationPayment = () => {
@@ -21,7 +21,7 @@ export const useCreateDeclarationPayment = () => {
 };
 
 export const useGenerateCfdiDemo = () => {
-  const { user } = useAuth();
+  const { effectiveUserId } = useProxy();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (declarationId: string) => {
@@ -32,7 +32,7 @@ export const useGenerateCfdiDemo = () => {
       if ((data as any)?.error) throw new Error((data as any).error);
       return data as { url: string; path: string; folio: string };
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['declaration_drafts', user?.id] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['declaration_drafts', effectiveUserId] }),
   });
 };
 
