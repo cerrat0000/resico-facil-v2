@@ -1,6 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { useProxy } from '@/contexts/ProxyContext';
+import { logAuditAction } from '@/lib/auditLogger';
 
 export interface TaxCalculation {
   id: string;
@@ -39,15 +41,15 @@ export interface DeclarationDraft {
 }
 
 export const useTaxCalculations = (opts: { onlyCurrent?: boolean } = {}) => {
-  const { user } = useAuth();
+  const { effectiveUserId } = useProxy();
   return useQuery({
-    queryKey: ['tax_calculations', user?.id, opts.onlyCurrent ?? true],
-    enabled: !!user,
+    queryKey: ['tax_calculations', effectiveUserId, opts.onlyCurrent ?? true],
+    enabled: !!effectiveUserId,
     queryFn: async () => {
       let q = supabase
         .from('tax_calculations')
         .select('*')
-        .eq('user_id', user!.id);
+        .eq('user_id', effectiveUserId!);
       if (opts.onlyCurrent ?? true) q = q.eq('is_current', true);
       const { data, error } = await q
         .order('period_year', { ascending: false })
@@ -60,15 +62,15 @@ export const useTaxCalculations = (opts: { onlyCurrent?: boolean } = {}) => {
 };
 
 export const usePeriodVersions = (year?: number, month?: number) => {
-  const { user } = useAuth();
+  const { effectiveUserId } = useProxy();
   return useQuery({
-    queryKey: ['tax_calculations_versions', user?.id, year, month],
-    enabled: !!user && !!year && !!month,
+    queryKey: ['tax_calculations_versions', effectiveUserId, year, month],
+    enabled: !!effectiveUserId && !!year && !!month,
     queryFn: async () => {
       const { data, error } = await supabase
         .from('tax_calculations')
         .select('*')
-        .eq('user_id', user!.id)
+        .eq('user_id', effectiveUserId!)
         .eq('period_year', year!)
         .eq('period_month', month!)
         .order('version_number', { ascending: false });
@@ -79,15 +81,15 @@ export const usePeriodVersions = (year?: number, month?: number) => {
 };
 
 export const useDeclarationDrafts = () => {
-  const { user } = useAuth();
+  const { effectiveUserId } = useProxy();
   return useQuery({
-    queryKey: ['declaration_drafts', user?.id],
-    enabled: !!user,
+    queryKey: ['declaration_drafts', effectiveUserId],
+    enabled: !!effectiveUserId,
     queryFn: async () => {
       const { data, error } = await supabase
         .from('declaration_drafts')
         .select('*')
-        .eq('user_id', user!.id)
+        .eq('user_id', effectiveUserId!)
         .order('updated_at', { ascending: false });
       if (error) throw error;
       return (data ?? []) as DeclarationDraft[];
@@ -96,7 +98,7 @@ export const useDeclarationDrafts = () => {
 };
 
 export const useCalculateTaxPeriod = () => {
-  const { user } = useAuth();
+  const { effectiveUserId } = useProxy();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: {
@@ -111,15 +113,27 @@ export const useCalculateTaxPeriod = () => {
       if ((data as any)?.error) throw new Error((data as any).error);
       return data as TaxCalculation;
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['tax_calculations', user?.id] });
-      qc.invalidateQueries({ queryKey: ['tax_calculations_versions', user?.id] });
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['tax_calculations', effectiveUserId] });
+      qc.invalidateQueries({ queryKey: ['tax_calculations_versions', effectiveUserId] });
+      qc.invalidateQueries({ queryKey: ['dashboard_stats', effectiveUserId] });
+      
+      if (effectiveUserId) {
+        logAuditAction({
+          action: 'accountant.calculate_tax',
+          tableName: 'tax_calculations',
+          recordId: data.id,
+          newData: data,
+          clientId: effectiveUserId
+        });
+      }
     },
   });
 };
 
 export const useSaveDeclarationDraft = () => {
   const { user } = useAuth();
+  const { effectiveUserId } = useProxy();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: {
@@ -129,17 +143,17 @@ export const useSaveDeclarationDraft = () => {
       form_data: any;
       status?: string;
     }) => {
-      if (!user) throw new Error('No user');
+      if (!user || !effectiveUserId) throw new Error('No user');
       // Buscar borrador existente por (user, calculation_id) — un cálculo congelado = un borrador
       const { data: existing } = await supabase
         .from('declaration_drafts')
         .select('id, status')
-        .eq('user_id', user.id)
+        .eq('user_id', effectiveUserId)
         .eq('calculation_id', input.calculation_id)
         .maybeSingle();
 
       const payload = {
-        user_id: user.id,
+        user_id: effectiveUserId,
         calculation_id: input.calculation_id,
         period_year: input.period_year,
         period_month: input.period_month,
@@ -158,29 +172,40 @@ export const useSaveDeclarationDraft = () => {
           .eq('id', existing.id)
           .select('*').single();
         if (error) throw error;
-        await supabase.from('audit_logs').insert({
-          user_id: user.id, action: 'declaration_draft.update',
-          table_name: 'declaration_drafts', record_id: data.id, new_data: payload,
+        
+        logAuditAction({
+          action: 'accountant.declaration_draft.update',
+          tableName: 'declaration_drafts',
+          recordId: data.id,
+          newData: payload,
+          clientId: effectiveUserId
         });
+        
         return data;
       }
       const { data, error } = await supabase
         .from('declaration_drafts').insert(payload).select('*').single();
       if (error) throw error;
-      await supabase.from('audit_logs').insert({
-        user_id: user.id, action: 'declaration_draft.create',
-        table_name: 'declaration_drafts', record_id: data.id, new_data: payload,
+
+      logAuditAction({
+        action: 'accountant.declaration_draft.create',
+        tableName: 'declaration_drafts',
+        recordId: data.id,
+        newData: payload,
+        clientId: effectiveUserId
       });
+      
       return data;
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['declaration_drafts', user?.id] });
+      qc.invalidateQueries({ queryKey: ['declaration_drafts', effectiveUserId] });
     },
   });
 };
 
 export const useFinalizeDraft = () => {
   const { user } = useAuth();
+  const { effectiveUserId } = useProxy();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (draftId: string) => {
@@ -189,18 +214,23 @@ export const useFinalizeDraft = () => {
         .update({ status: 'finalized', frozen_at: new Date().toISOString() })
         .eq('id', draftId).select('*').single();
       if (error) throw error;
-      await supabase.from('audit_logs').insert({
-        user_id: user!.id, action: 'declaration.finalize',
-        table_name: 'declaration_drafts', record_id: draftId,
-      });
       return data;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['declaration_drafts', user?.id] }),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ['declaration_drafts', effectiveUserId] });
+      
+      logAuditAction({
+        action: 'accountant.declaration.finalize',
+        tableName: 'declaration_drafts',
+        recordId: data.id,
+        clientId: effectiveUserId
+      });
+    },
   });
 };
 
 export const useGenerateDeclarationPdf = () => {
-  const { user } = useAuth();
+  const { effectiveUserId } = useProxy();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: { draft_id?: string; calculation_id?: string }) => {
@@ -210,7 +240,7 @@ export const useGenerateDeclarationPdf = () => {
       return data as { draft: DeclarationDraft; pdf_url: string; pdf_storage_path: string };
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['declaration_drafts', user?.id] });
+      qc.invalidateQueries({ queryKey: ['declaration_drafts', effectiveUserId] });
     },
   });
 };

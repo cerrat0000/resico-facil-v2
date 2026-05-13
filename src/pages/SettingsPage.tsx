@@ -8,9 +8,11 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { User, Shield, Loader2, Sparkles } from "lucide-react";
+import { User, Shield, Loader2, Sparkles, Lock } from "lucide-react";
 import { useTaxpayerProfile } from "@/hooks/useTaxpayerProfile";
 import { useProfile } from "@/hooks/useProfile";
+import { useProxy } from "@/contexts/ProxyContext";
+import { ClientAccountantManager } from "@/components/accountant/ClientAccountantManager";
 import { z } from "zod";
 
 const fiscalSchema = z.object({
@@ -28,6 +30,7 @@ const SettingsPage = () => {
   const location = useLocation();
   const isNewUser = (location.state as any)?.fromRegister === true;
   const { user } = useAuth();
+  const { isProxyMode } = useProxy();
   const { data: profile, isLoading: profileLoading, update: updateProfile } = useProfile();
   const { data: taxpayer, isLoading: taxLoading, upsert: upsertTaxpayer } = useTaxpayerProfile();
 
@@ -53,6 +56,7 @@ const SettingsPage = () => {
   const isSaving = updateProfile.isPending || upsertTaxpayer.isPending;
 
   const handleSave = async () => {
+    if (isProxyMode) return; // Fail-safe
     const parsed = fiscalSchema.safeParse({ rfc, curp, fiscal_address: address, economic_activity: activity });
     if (!parsed.success) {
       toast.error(parsed.error.issues[0].message);
@@ -95,9 +99,19 @@ const SettingsPage = () => {
           </Card>
         )}
 
-        <h1 className="text-2xl font-bold font-display">Ajustes</h1>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <h1 className="text-2xl font-bold font-display">Ajustes</h1>
+          {isProxyMode && (
+            <Badge variant="secondary" className="bg-amber-100 text-amber-700 border-amber-200 gap-1 px-3 py-1">
+              <Lock size={12} /> Solo Lectura
+            </Badge>
+          )}
+        </div>
 
-        <Card>
+        {/* ACCOUNTANT MANAGEMENT SECTION - ONLY FOR TAXPAYERS */}
+        {!isProxyMode && <ClientAccountantManager />}
+
+        <Card className={isProxyMode ? "opacity-75 grayscale-[0.5]" : ""}>
           <CardHeader className="pb-3">
             <div className="flex items-center gap-2">
               <User size={18} className="text-primary" />
@@ -129,13 +143,14 @@ const SettingsPage = () => {
                   onChange={(e) => setPhone(e.target.value)}
                   className="h-12"
                   maxLength={15}
+                  disabled={isProxyMode}
                 />
               )}
             </div>
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className={isProxyMode ? "opacity-75 grayscale-[0.5]" : ""}>
           <CardHeader className="pb-3">
             <div className="flex items-center gap-2">
               <Shield size={18} className="text-primary" />
@@ -155,6 +170,7 @@ const SettingsPage = () => {
                   onChange={(e) => setRfc(e.target.value.toUpperCase())}
                   className="h-12 uppercase"
                   maxLength={13}
+                  disabled={isProxyMode}
                 />
               )}
             </div>
@@ -170,6 +186,7 @@ const SettingsPage = () => {
                   onChange={(e) => setCurp(e.target.value.toUpperCase())}
                   className="h-12 uppercase"
                   maxLength={18}
+                  disabled={isProxyMode}
                 />
               )}
             </div>
@@ -185,6 +202,7 @@ const SettingsPage = () => {
                   onChange={(e) => setAddress(e.target.value)}
                   className="h-12"
                   maxLength={500}
+                  disabled={isProxyMode}
                 />
               )}
             </div>
@@ -200,11 +218,16 @@ const SettingsPage = () => {
                   onChange={(e) => setActivity(e.target.value)}
                   className="h-12"
                   maxLength={200}
+                  disabled={isProxyMode}
                 />
               )}
             </div>
-            <Button size="lg" className="w-full" onClick={handleSave} disabled={isSaving || isLoading}>
-              {isSaving ? (
+            <Button size="lg" className="w-full" onClick={handleSave} disabled={isSaving || isLoading || isProxyMode}>
+              {isProxyMode ? (
+                <>
+                  <Lock size={16} className="mr-2" /> Bloqueado en modo contador
+                </>
+              ) : isSaving ? (
                 <>
                   <Loader2 size={16} className="mr-2 animate-spin" /> Guardando...
                 </>

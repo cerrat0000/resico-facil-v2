@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { useProxy } from '@/contexts/ProxyContext';
 
 interface DocType {
   id: string; code: string; name: string; description: string | null; is_required: boolean;
@@ -30,6 +31,7 @@ const BUCKET = 'taxpayer-documents';
 
 const Documents = () => {
   const { user } = useAuth();
+  const { effectiveUserId } = useProxy();
   const qc = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedTypeId, setSelectedTypeId] = useState<string>('');
@@ -46,13 +48,13 @@ const Documents = () => {
   });
 
   const docsQ = useQuery({
-    queryKey: ['documents', user?.id],
-    enabled: !!user,
+    queryKey: ['documents', effectiveUserId],
+    enabled: !!effectiveUserId,
     queryFn: async () => {
       const { data, error } = await supabase
         .from('documents')
         .select('id, file_name, file_url, document_type_id, verification_status, mime_type, created_at')
-        .eq('user_id', user!.id).eq('status', 'active')
+        .eq('user_id', effectiveUserId!).eq('status', 'active')
         .order('created_at', { ascending: false });
       if (error) throw error;
       return (data ?? []) as DocItem[];
@@ -61,16 +63,16 @@ const Documents = () => {
 
   const upload = useMutation({
     mutationFn: async (file: File) => {
-      if (!user) throw new Error('No user');
+      if (!user || !effectiveUserId) throw new Error('No user');
       if (file.size > 10 * 1024 * 1024) throw new Error('El archivo debe pesar menos de 10 MB');
       const ext = file.name.split('.').pop();
-      const path = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const path = `${effectiveUserId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
       const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, file, {
         contentType: file.type, upsert: false,
       });
       if (upErr) throw upErr;
       const { data, error: insErr } = await supabase.from('documents').insert({
-        user_id: user.id, file_name: file.name, file_url: path,
+        user_id: effectiveUserId, file_name: file.name, file_url: path,
         document_type_id: selectedTypeId || null, mime_type: file.type,
         file_size: file.size, verification_status: 'pending', status: 'active',
       }).select('id').single();
@@ -86,7 +88,8 @@ const Documents = () => {
       setDialogOpen(false);
       setSelectedTypeId('');
       if (fileRef.current) fileRef.current.value = '';
-      qc.invalidateQueries({ queryKey: ['documents', user?.id] });
+      qc.invalidateQueries({ queryKey: ['documents', effectiveUserId] });
+      qc.invalidateQueries({ queryKey: ['dashboard_stats', effectiveUserId] });
     },
     onError: (e: any) => toast.error(`Error al subir: ${e.message}`),
   });
@@ -126,7 +129,7 @@ const Documents = () => {
           <h1 className="text-2xl font-bold font-display">Expediente Digital</h1>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
-              <Button size="lg"><Upload size={16} /> Subir documento</Button>
+              <Button type="button" size="lg"><Upload size={16} /> Subir documento</Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>

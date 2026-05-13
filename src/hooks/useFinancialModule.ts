@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/contexts/AuthContext";
+import { useProxy } from "@/contexts/ProxyContext";
 
 export type FinancialScore = {
   id: string;
@@ -35,15 +35,15 @@ export type FinancialApplication = {
 };
 
 export const useLatestScore = () => {
-  const { user } = useAuth();
+  const { effectiveUserId } = useProxy();
   return useQuery({
-    queryKey: ["financial_score", user?.id],
-    enabled: !!user,
+    queryKey: ["financial_score", effectiveUserId],
+    enabled: !!effectiveUserId,
     queryFn: async () => {
       const { data } = await supabase
         .from("financial_scores")
         .select("*")
-        .eq("user_id", user!.id)
+        .eq("user_id", effectiveUserId!)
         .order("computed_at", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -53,15 +53,15 @@ export const useLatestScore = () => {
 };
 
 export const useFinancialApplications = () => {
-  const { user } = useAuth();
+  const { effectiveUserId } = useProxy();
   return useQuery({
-    queryKey: ["financial_applications", user?.id],
-    enabled: !!user,
+    queryKey: ["financial_applications", effectiveUserId],
+    enabled: !!effectiveUserId,
     queryFn: async () => {
       const { data } = await supabase
         .from("financial_applications")
         .select("*")
-        .eq("user_id", user!.id)
+        .eq("user_id", effectiveUserId!)
         .order("created_at", { ascending: false });
       return (data ?? []) as FinancialApplication[];
     },
@@ -88,7 +88,7 @@ export const computePayment = (amount: number, months: number, monthlyRate: numb
 };
 
 export const useCreateApplication = () => {
-  const { user } = useAuth();
+  const { effectiveUserId } = useProxy();
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: {
@@ -103,7 +103,7 @@ export const useCreateApplication = () => {
       const { data, error } = await supabase
         .from("financial_applications")
         .insert({
-          user_id: user!.id,
+          user_id: effectiveUserId!,
           requested_amount: input.requested_amount,
           term_months: input.term_months,
           monthly_rate: input.monthly_rate,

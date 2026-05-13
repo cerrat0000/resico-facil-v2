@@ -11,6 +11,8 @@ import { Plus, TrendingUp, TrendingDown, AlertTriangle } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { useProxy } from "@/contexts/ProxyContext";
+import { useIncomeExpenses, Transaction } from "@/hooks/useIncomeExpenses";
 import { useAuth } from "@/contexts/AuthContext";
 
 const RESICO_LIMIT = 3_500_000;
@@ -46,61 +48,20 @@ const BgBarChart: React.FC<{ type: "income" | "expense" }> = ({ type }) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const IncomeExpenses = () => {
-  const { user } = useAuth();
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loadingData, setLoadingData] = useState(true);
+  const { effectiveUserId } = useProxy();
+  const { 
+    transactions, 
+    isLoading: loadingData, 
+    addTransaction, 
+    isAdding: saving 
+  } = useIncomeExpenses();
+
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [newType, setNewType] = useState<"income" | "expense">("income");
   const [newAmount, setNewAmount] = useState("");
   const [newCategory, setNewCategory] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [newDate, setNewDate] = useState(new Date().toISOString().split("T")[0]);
-
-  // ── Load ──────────────────────────────────────────────────────────────────
-  const loadTransactions = async () => {
-    if (!user) return;
-    setLoadingData(true);
-
-    const [incomeRes, expenseRes] = await Promise.all([
-      supabase
-        .from("income_records")
-        .select("id, amount, category_name, description, date")
-        .eq("user_id", user.id)
-        .eq("status", "active")
-        .order("date", { ascending: false }),
-      supabase
-        .from("expense_records")
-        .select("id, amount, category_name, description, date")
-        .eq("user_id", user.id)
-        .eq("status", "active")
-        .order("date", { ascending: false }),
-    ]);
-
-    const income: Transaction[] = (incomeRes.data ?? []).map((r) => ({
-      id: r.id,
-      type: "income",
-      amount: Number(r.amount),
-      category: r.category_name ?? "",
-      description: r.description ?? "",
-      date: r.date,
-    }));
-    const expense: Transaction[] = (expenseRes.data ?? []).map((r) => ({
-      id: r.id,
-      type: "expense",
-      amount: Number(r.amount),
-      category: r.category_name ?? "",
-      description: r.description ?? "",
-      date: r.date,
-    }));
-
-    setTransactions([...income, ...expense].sort((a, b) => b.date.localeCompare(a.date)));
-    setLoadingData(false);
-  };
-
-  useEffect(() => {
-    loadTransactions();
-  }, [user]);
 
   // ── Save ──────────────────────────────────────────────────────────────────
   const handleAdd = async () => {
@@ -108,35 +69,29 @@ const IncomeExpenses = () => {
       toast.error("Completa monto y categoría");
       return;
     }
-    if (!user) return;
-    setSaving(true);
-
+    if (!effectiveUserId) return;
     const dateObj = new Date(newDate + "T00:00:00");
-    const payload = {
-      user_id: user.id,
-      amount: parseFloat(newAmount),
-      category_name: newCategory,
-      description: newDescription || null,
-      date: newDate,
-      period_year: dateObj.getFullYear(),
-      period_month: dateObj.getMonth() + 1,
-      status: "active",
-    };
-
-    const { error } = await supabase.from(newType === "income" ? "income_records" : "expense_records").insert(payload);
-
-    if (error) {
-      toast.error(`Error al guardar: ${error.message}`);
-    } else {
-      toast.success(newType === "income" ? "Ingreso registrado" : "Gasto registrado");
+    
+    try {
+      await addTransaction({
+        type: newType,
+        amount: parseFloat(newAmount),
+        category_name: newCategory,
+        description: newDescription || null,
+        date: newDate,
+        period_year: dateObj.getFullYear(),
+        period_month: dateObj.getMonth() + 1,
+        status: "active",
+      });
+      
       setDialogOpen(false);
       setNewAmount("");
       setNewCategory("");
       setNewDescription("");
       setNewDate(new Date().toISOString().split("T")[0]);
-      await loadTransactions();
+    } catch (error) {
+      // Error is handled by the hook toast
     }
-    setSaving(false);
   };
 
   const totalIncome = transactions.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
@@ -248,7 +203,7 @@ const IncomeExpenses = () => {
                     <Label>Fecha</Label>
                     <Input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} className="h-12" />
                   </div>
-                  <Button size="lg" className="w-full" onClick={handleAdd} disabled={saving}>
+                  <Button type="button" size="lg" className="w-full" onClick={handleAdd} disabled={saving}>
                     {saving ? "Guardando..." : "Guardar"}
                   </Button>
                 </div>

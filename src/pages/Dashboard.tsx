@@ -4,10 +4,11 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Progress } from '@/components/ui/progress';
 import { useAuth } from '@/contexts/AuthContext';
+import { useProxy } from '@/contexts/ProxyContext';
 import { useNavigate } from 'react-router-dom';
 import {
-  TrendingUp, TrendingDown, FolderOpen,
-  FileText, Plus, ArrowRight, AlertCircle, CheckCircle2
+  FileText, Plus, ArrowRight, AlertCircle, CheckCircle2,
+  ShieldCheck, Calculator, Activity, TrendingUp, TrendingDown, FolderOpen
 } from 'lucide-react';
 import AppLayout from '@/components/AppLayout';
 import AccountantInvitations from '@/components/AccountantInvitations';
@@ -45,6 +46,7 @@ const StatCard: React.FC<{
 
 const Dashboard = () => {
   const { user } = useAuth();
+  const { isProxyMode, proxyClientName } = useProxy();
   const navigate = useNavigate();
   const { data, isLoading } = useDashboardStats();
   const { data: role } = useUserRole();
@@ -52,41 +54,62 @@ const Dashboard = () => {
   const currentMonth = new Date().toLocaleDateString('es-MX', { month: 'long', year: 'numeric' });
 
   React.useEffect(() => {
-    if (role === 'accountant') navigate('/contador', { replace: true });
-  }, [role, navigate]);
+    if (role === 'accountant' && !isProxyMode) navigate('/contador', { replace: true });
+  }, [role, isProxyMode, navigate]);
 
   return (
     <AppLayout>
       <div className="max-w-4xl mx-auto space-y-6">
         <div>
-          <h1 className="text-2xl font-bold font-display">¡Hola, {displayName}!</h1>
-          <p className="text-muted-foreground text-sm capitalize">{currentMonth}</p>
+          {isProxyMode ? (
+            <>
+              <h1 className="text-2xl font-bold font-display flex items-center gap-2">
+                <ShieldCheck className="text-amber-500" /> Operando como {proxyClientName || 'Cliente'}
+              </h1>
+              <p className="text-muted-foreground text-sm">Resumen operativo fiscal para {currentMonth}</p>
+            </>
+          ) : (
+            <>
+              <h1 className="text-2xl font-bold font-display">¡Hola, {displayName}!</h1>
+              <p className="text-muted-foreground text-sm capitalize">{currentMonth}</p>
+            </>
+          )}
         </div>
 
         <AccountantInvitations />
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <StatCard
-            title="Ingresos del mes"
+            title="Ingresos"
             value={fmt(data?.monthIncome ?? 0)}
             icon={<TrendingUp size={18} />}
             variant="success"
             loading={isLoading}
           />
           <StatCard
-            title="Gastos del mes"
+            title="Gastos"
             value={fmt(data?.monthExpenses ?? 0)}
             icon={<TrendingDown size={18} />}
             loading={isLoading}
           />
-          <StatCard
-            title="Expediente"
-            value={`${data?.profileCompletion ?? 0}%`}
-            subtitle="Perfil fiscal"
-            icon={<FolderOpen size={18} />}
-            variant={data && data.profileCompletion === 100 ? 'success' : 'warning'}
-            loading={isLoading}
-          />
+          {isProxyMode ? (
+             <StatCard
+              title="ISR Estimado"
+              value={fmt(data?.estimatedIsr ?? 0)}
+              icon={<Calculator size={18} />}
+              variant="warning"
+              loading={isLoading}
+            />
+          ) : (
+            <StatCard
+              title="Expediente"
+              value={`${data?.profileCompletion ?? 0}%`}
+              subtitle="Perfil fiscal"
+              icon={<FolderOpen size={18} />}
+              variant={data && data.profileCompletion === 100 ? 'success' : 'warning'}
+              loading={isLoading}
+            />
+          )}
           <StatCard
             title="Declaraciones"
             value={`${data?.pendingDeclarations ?? 0}`}
@@ -95,6 +118,23 @@ const Dashboard = () => {
             loading={isLoading}
           />
         </div>
+
+        {isProxyMode && data?.lastMovement && (
+          <Card className="border-l-4 border-l-primary">
+            <CardContent className="p-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-full bg-primary/10 text-primary">
+                  <Activity size={16} />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Último Movimiento</p>
+                  <p className="text-sm font-semibold">{data.lastMovement.description || data.lastMovement.category}</p>
+                </div>
+              </div>
+              <p className="font-bold text-primary">{fmt(data.lastMovement.amount)}</p>
+            </CardContent>
+          </Card>
+        )}
 
         {!isLoading && data && data.profileCompletion < 100 && (
           <Card>
