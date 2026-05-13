@@ -17,6 +17,26 @@ const MONTHS = [
 const fmt = (n: number) =>
   `$${Number(n ?? 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+async function assertCanManageTarget(
+  admin: ReturnType<typeof createClient>,
+  actorUserId: string,
+  targetUserId: string,
+) {
+  if (actorUserId === targetUserId) return;
+
+  const { data: link, error } = await admin
+    .from('accountant_client_links')
+    .select('permissions, status')
+    .eq('accountant_id', actorUserId)
+    .eq('client_id', targetUserId)
+    .maybeSingle();
+
+  const canEdit = (link?.permissions as any)?.edit === true;
+  if (error || !link || link.status !== 'active' || !canEdit) {
+    throw new Error('Forbidden');
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -28,11 +48,16 @@ Deno.serve(async (req) => {
       });
     }
 
+    const supaUrl = Deno.env.get('SUPABASE_URL')!;
+    const anon = Deno.env.get('SUPABASE_ANON_KEY')!;
+    const service = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+
     const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!,
+      supaUrl,
+      anon,
       { global: { headers: { Authorization: authHeader } } },
     );
+    const admin = createClient(supaUrl, service);
 
     const token = authHeader.replace('Bearer ', '');
     const { data: claimsData, error: claimsErr } = await supabase.auth.getClaims(token);
@@ -41,11 +66,12 @@ Deno.serve(async (req) => {
         status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
-    const userId = claimsData.claims.sub as string;
+    const actorUserId = claimsData.claims.sub as string;
 
     const body = await req.json().catch(() => ({}));
     const draftId: string | undefined = body?.draft_id;
     const calculationId: string | undefined = body?.calculation_id;
+    const requestedTargetUserId = typeof body?.target_user_id === 'string' ? body.target_user_id : null;
     if (!draftId && !calculationId) {
       return new Response(JSON.stringify({ error: 'draft_id o calculation_id requerido' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -54,29 +80,37 @@ Deno.serve(async (req) => {
 
     // Obtener borrador (creando uno desde calculation si no existe)
     let draft: any = null;
+    let targetUserId = requestedTargetUserId || actorUserId;
     if (draftId) {
-      const { data, error } = await supabase
+      const { data, error } = await admin
         .from('declaration_drafts').select('*').eq('id', draftId).maybeSingle();
       if (error) throw error;
       draft = data;
+      if (!draft) throw new Error('DeclaraciÃ³n no encontrada');
+      targetUserId = draft.user_id;
+      if (requestedTargetUserId && requestedTargetUserId !== targetUserId) throw new Error('Forbidden');
+      await assertCanManageTarget(admin, actorUserId, targetUserId);
     } else {
-      const { data: calc } = await supabase
+      const { data: calc } = await admin
         .from('tax_calculations').select('*').eq('id', calculationId!).maybeSingle();
-      if (!calc || calc.user_id !== userId) {
+      if (!calc) throw new Error('CÃ¡lculo asociado no encontrado');
+      targetUserId = calc.user_id;
+      await assertCanManageTarget(admin, actorUserId, targetUserId);
+      if (requestedTargetUserId && requestedTargetUserId !== targetUserId) {
         return new Response(JSON.stringify({ error: 'Forbidden' }), {
           status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
-      const { data: existing } = await supabase
+      const { data: existing } = await admin
         .from('declaration_drafts').select('*')
-        .eq('user_id', userId)
+        .eq('user_id', targetUserId)
         .eq('calculation_id', calc.id)
         .maybeSingle();
       if (existing) draft = existing;
       else {
-        const { data: created, error: cErr } = await supabase
+        const { data: created, error: cErr } = await admin
           .from('declaration_drafts').insert({
-            user_id: userId,
+            user_id: targetUserId,
             calculation_id: calc.id,
             period_year: calc.period_year,
             period_month: calc.period_month,
@@ -95,23 +129,24 @@ Deno.serve(async (req) => {
       }
     }
 
-    if (!draft || draft.user_id !== userId) {
+    if (!draft || draft.user_id !== targetUserId) {
       return new Response(JSON.stringify({ error: 'Forbidden' }), {
         status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
     // Cargar cálculo asociado (snapshot)
-    const { data: calc, error: calcErr } = await supabase
+    const { data: calc, error: calcErr } = await admin
       .from('tax_calculations').select('*').eq('id', draft.calculation_id).maybeSingle();
     if (calcErr || !calc) throw new Error('Cálculo asociado no encontrado');
+    if (calc.user_id !== targetUserId) throw new Error('Forbidden');
 
     // Cargar perfil para datos fiscales
-    const { data: tp } = await supabase
+    const { data: tp } = await admin
       .from('taxpayer_profiles').select('rfc, curp, fiscal_address, economic_activity, tax_regime')
-      .eq('user_id', userId).maybeSingle();
-    const { data: profile } = await supabase
-      .from('profiles').select('full_name').eq('user_id', userId).maybeSingle();
+      .eq('user_id', targetUserId).maybeSingle();
+    const { data: profile } = await admin
+      .from('profiles').select('full_name').eq('user_id', targetUserId).maybeSingle();
 
     // Generar PDF
     const pdfDoc = await PDFDocument.create();
@@ -193,13 +228,13 @@ Deno.serve(async (req) => {
 
     // Subir a Storage
     const ts = Date.now();
-    const path = `${userId}/${calc.period_year}/${String(calc.period_month).padStart(2, '0')}/v${calc.version_number}-${ts}.pdf`;
-    const { error: upErr } = await supabase.storage
+    const path = `${targetUserId}/${calc.period_year}/${String(calc.period_month).padStart(2, '0')}/v${calc.version_number}-${ts}.pdf`;
+    const { error: upErr } = await admin.storage
       .from('declaration-pdfs')
       .upload(path, pdfBytes, { contentType: 'application/pdf', upsert: false });
     if (upErr) throw upErr;
 
-    const { data: signed, error: signErr } = await supabase.storage
+    const { data: signed, error: signErr } = await admin.storage
       .from('declaration-pdfs').createSignedUrl(path, 60 * 60 * 24 * 7);
     if (signErr) throw signErr;
 
@@ -216,7 +251,7 @@ Deno.serve(async (req) => {
       calculation_id: calc.id,
       frozen_snapshot: true,
     };
-    const { data: updated, error: updErr } = await supabase
+    const { data: updated, error: updErr } = await admin
       .from('declaration_drafts')
       .update({
         status: 'exported_pdf',
@@ -230,12 +265,17 @@ Deno.serve(async (req) => {
       .select('*').single();
     if (updErr) throw updErr;
 
-    await supabase.from('audit_logs').insert({
-      user_id: userId,
+    await admin.from('audit_logs').insert({
+      user_id: targetUserId,
       action: 'declaration.export_pdf',
       table_name: 'declaration_drafts',
       record_id: draft.id,
-      new_data: { path, calculation_id: calc.id, version_number: calc.version_number },
+      new_data: {
+        path,
+        calculation_id: calc.id,
+        version_number: calc.version_number,
+        _metadata: { actor_user_id: actorUserId, target_user_id: targetUserId },
+      },
     });
 
     return new Response(JSON.stringify({

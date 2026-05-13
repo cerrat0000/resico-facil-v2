@@ -30,6 +30,26 @@ function pickRate(monthlyIncome: number): number {
   return 0.025;
 }
 
+async function assertCanManageTarget(
+  admin: ReturnType<typeof createClient>,
+  actorUserId: string,
+  targetUserId: string,
+) {
+  if (actorUserId === targetUserId) return;
+
+  const { data: link, error } = await admin
+    .from('accountant_client_links')
+    .select('permissions, status')
+    .eq('accountant_id', actorUserId)
+    .eq('client_id', targetUserId)
+    .maybeSingle();
+
+  const canEdit = (link?.permissions as any)?.edit === true;
+  if (error || !link || link.status !== 'active' || !canEdit) {
+    throw new Error('Forbidden');
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -44,11 +64,16 @@ Deno.serve(async (req) => {
       });
     }
 
+    const supaUrl = Deno.env.get('SUPABASE_URL')!;
+    const anon = Deno.env.get('SUPABASE_ANON_KEY')!;
+    const service = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+
     const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_ANON_KEY')!,
+      supaUrl,
+      anon,
       { global: { headers: { Authorization: authHeader } } },
     );
+    const admin = createClient(supaUrl, service);
 
     const token = authHeader.replace('Bearer ', '');
     const { data: claimsData, error: claimsErr } = await supabase.auth.getClaims(token);
@@ -58,14 +83,18 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
-    const userId = claimsData.claims.sub as string;
+    const actorUserId = claimsData.claims.sub as string;
 
     const body = await req.json().catch(() => ({}));
     const year = Number(body?.year);
     const month = Number(body?.month);
+    const requestedTargetUserId = typeof body?.target_user_id === 'string' ? body.target_user_id : null;
+    const targetUserId = requestedTargetUserId || actorUserId;
     const taxpayerProfileId: string | null = body?.taxpayer_profile_id ?? null;
     const overrides = body?.overrides ?? null;
     const notes: string | null = typeof body?.notes === 'string' ? body.notes : null;
+
+    await assertCanManageTarget(admin, actorUserId, targetUserId);
 
     const validOverride = (v: any) => v !== undefined && v !== null && Number.isFinite(Number(v)) && Number(v) >= 0;
     if (overrides) {
@@ -91,12 +120,12 @@ Deno.serve(async (req) => {
 
     // Validar ownership del taxpayer_profile si se provee
     if (taxpayerProfileId) {
-      const { data: tp } = await supabase
+      const { data: tp } = await admin
         .from('taxpayer_profiles')
         .select('id, user_id')
         .eq('id', taxpayerProfileId)
         .maybeSingle();
-      if (!tp || tp.user_id !== userId) {
+      if (!tp || tp.user_id !== targetUserId) {
         return new Response(JSON.stringify({ error: 'Forbidden' }), {
           status: 403,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -106,17 +135,17 @@ Deno.serve(async (req) => {
 
     // Consultar ingresos y gastos del periodo (RLS asegura ownership)
     const [incomeRes, expenseRes] = await Promise.all([
-      supabase
+      admin
         .from('income_records')
         .select('amount')
-        .eq('user_id', userId)
+        .eq('user_id', targetUserId)
         .eq('status', 'active')
         .eq('period_year', year)
         .eq('period_month', month),
-      supabase
+      admin
         .from('expense_records')
         .select('amount, is_deductible')
-        .eq('user_id', userId)
+        .eq('user_id', targetUserId)
         .eq('status', 'active')
         .eq('period_year', year)
         .eq('period_month', month),
@@ -179,17 +208,17 @@ Deno.serve(async (req) => {
 
     // Versionado: cada cálculo crea una nueva fila inmutable.
     // El trigger SQL marca versiones anteriores como is_current=false.
-    const { data: previous } = await supabase
+    const { data: previous } = await admin
       .from('tax_calculations')
       .select('id, version_number, total_income, total_expenses, taxable_base, estimated_tax')
-      .eq('user_id', userId)
+      .eq('user_id', targetUserId)
       .eq('period_year', year)
       .eq('period_month', month)
       .eq('is_current', true)
       .maybeSingle();
 
     const payload = {
-      user_id: userId,
+      user_id: targetUserId,
       taxpayer_profile_id: taxpayerProfileId,
       period_year: year,
       period_month: month,
@@ -203,7 +232,7 @@ Deno.serve(async (req) => {
       notes,
     };
 
-    const { data: inserted, error: insErr } = await supabase
+    const { data: inserted, error: insErr } = await admin
       .from('tax_calculations')
       .insert(payload)
       .select('id, version_number, supersedes_id, is_current')
@@ -211,15 +240,21 @@ Deno.serve(async (req) => {
     if (insErr) throw insErr;
     const calcId = inserted.id;
 
-    await supabase.from('audit_logs').insert({
-      user_id: userId,
+    await admin.from('audit_logs').insert({
+      user_id: targetUserId,
       action: previous
         ? (isAdjusted ? 'tax_calculation.adjust' : 'tax_calculation.recalculate')
         : 'tax_calculation.create',
       table_name: 'tax_calculations',
       record_id: calcId,
       old_data: previous ?? null,
-      new_data: { ...payload, version_number: inserted.version_number, overrides, adjustment_notes: notes },
+      new_data: {
+        ...payload,
+        version_number: inserted.version_number,
+        overrides,
+        adjustment_notes: notes,
+        _metadata: { actor_user_id: actorUserId, target_user_id: targetUserId },
+      },
     });
 
     return new Response(

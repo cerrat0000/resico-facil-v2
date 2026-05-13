@@ -4,16 +4,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Plus, TrendingUp, TrendingDown, AlertTriangle } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
-import { supabase } from "@/integrations/supabase/client";
 import { useProxy } from "@/contexts/ProxyContext";
-import { useIncomeExpenses, Transaction } from "@/hooks/useIncomeExpenses";
-import { useAuth } from "@/contexts/AuthContext";
+import { useIncomeExpenses } from "@/hooks/useIncomeExpenses";
 
 const RESICO_LIMIT = 3_500_000;
 
@@ -177,18 +174,21 @@ const IncomeExpenses = () => {
                   </div>
                   <div className="space-y-2">
                     <Label>Categoría</Label>
-                    <Select value={newCategory} onValueChange={setNewCategory}>
-                      <SelectTrigger className="h-12">
-                        <SelectValue placeholder="Selecciona" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {(newType === "income" ? incomeCategories : expenseCategories).map((c) => (
-                          <SelectItem key={c} value={c}>
-                            {c}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <select
+                      id="transaction-category"
+                      value={newCategory}
+                      onChange={(e) => setNewCategory(e.target.value)}
+                      className="flex h-12 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <option value="" disabled>
+                        Selecciona
+                      </option>
+                      {(newType === "income" ? incomeCategories : expenseCategories).map((c) => (
+                        <option key={`${newType}-${c}`} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div className="space-y-2">
                     <Label>Descripción (opcional)</Label>

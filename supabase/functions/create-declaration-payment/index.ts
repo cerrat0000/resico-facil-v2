@@ -38,6 +38,26 @@ async function resolveOrCreateCustomer(
   return created.id;
 }
 
+async function assertCanManageTarget(
+  admin: ReturnType<typeof createClient>,
+  actorUserId: string,
+  targetUserId: string,
+) {
+  if (actorUserId === targetUserId) return;
+
+  const { data: link, error } = await admin
+    .from("accountant_client_links")
+    .select("permissions, status")
+    .eq("accountant_id", actorUserId)
+    .eq("client_id", targetUserId)
+    .maybeSingle();
+
+  const canEdit = (link?.permissions as any)?.edit === true;
+  if (error || !link || link.status !== "active" || !canEdit) {
+    throw new Error("Forbidden");
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405, headers: corsHeaders });
@@ -64,11 +84,12 @@ Deno.serve(async (req) => {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    const userId = claims.claims.sub as string;
+    const actorUserId = claims.claims.sub as string;
     const email = claims.claims.email as string | undefined;
 
     const body = await req.json();
     const { declarationId, returnUrl, environment } = body;
+    const requestedTargetUserId = typeof body?.target_user_id === "string" ? body.target_user_id : null;
     if (!declarationId || typeof declarationId !== "string") throw new Error("Missing declarationId");
     if (!returnUrl) throw new Error("Missing returnUrl");
     if (environment !== "sandbox" && environment !== "live") throw new Error("Invalid environment");
@@ -82,7 +103,9 @@ Deno.serve(async (req) => {
       .eq("id", declarationId)
       .maybeSingle();
     if (dErr || !draft) throw new Error("Declaración no encontrada");
-    if (draft.user_id !== userId) throw new Error("Forbidden");
+    const targetUserId = draft.user_id;
+    if (requestedTargetUserId && requestedTargetUserId !== targetUserId) throw new Error("Forbidden");
+    await assertCanManageTarget(admin, actorUserId, targetUserId);
     if (draft.payment_status === "paid") throw new Error("Esta declaración ya fue pagada");
 
     const { data: calc, error: cErr2 } = await admin
@@ -97,7 +120,7 @@ Deno.serve(async (req) => {
 
     const env: StripeEnv = environment;
     const stripe = createStripeClient(env);
-    const customerId = await resolveOrCreateCustomer(stripe, { email, userId });
+    const customerId = await resolveOrCreateCustomer(stripe, { email, userId: targetUserId });
 
     const periodLabel = `${String(draft.period_month).padStart(2, "0")}/${draft.period_year}`;
     const session = await stripe.checkout.sessions.create({
@@ -120,7 +143,8 @@ Deno.serve(async (req) => {
       billing_address_collection: "required",
       automatic_tax: { enabled: false },
       metadata: {
-        userId,
+        userId: targetUserId,
+        actorUserId,
         declarationId,
         periodYear: String(draft.period_year),
         periodMonth: String(draft.period_month),

@@ -148,9 +148,13 @@ export const usePendingInvitations = () => {
     mutationFn: async ({ id, accept }: { id: string; accept: boolean }) => {
       if (!user) throw new Error("No user");
       const status = accept ? "active" : "rejected";
+      const updatePayload = accept
+        ? { status, permissions: { read: true, edit: true, documents: true } }
+        : { status };
+
       const { error } = await supabase
         .from("accountant_client_links")
-        .update({ status })
+        .update(updatePayload)
         .eq("id", id)
         .eq("client_id", user.id);
       if (error) throw error;

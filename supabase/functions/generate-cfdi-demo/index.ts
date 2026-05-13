@@ -17,6 +17,25 @@ async function sha256(input: string) {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+async function assertCanAccessTarget(
+  admin: ReturnType<typeof createClient>,
+  actorUserId: string,
+  targetUserId: string,
+) {
+  if (actorUserId === targetUserId) return;
+
+  const { data: link, error } = await admin
+    .from("accountant_client_links")
+    .select("status")
+    .eq("accountant_id", actorUserId)
+    .eq("client_id", targetUserId)
+    .maybeSingle();
+
+  if (error || !link || link.status !== "active") {
+    throw new Error("Forbidden");
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
   if (req.method !== "POST") return new Response("Method not allowed", { status: 405, headers: corsHeaders });
@@ -42,9 +61,9 @@ Deno.serve(async (req) => {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    const userId = claims.claims.sub as string;
+    const actorUserId = claims.claims.sub as string;
 
-    const { declarationId } = await req.json();
+    const { declarationId, target_user_id: requestedTargetUserId } = await req.json();
     if (!declarationId) throw new Error("Missing declarationId");
 
     const admin = createClient(supaUrl, service);
@@ -54,7 +73,9 @@ Deno.serve(async (req) => {
       .eq("id", declarationId)
       .maybeSingle();
     if (dErr || !draft) throw new Error("Declaración no encontrada");
-    if (draft.user_id !== userId) throw new Error("Forbidden");
+    const targetUserId = draft.user_id;
+    if (typeof requestedTargetUserId === "string" && requestedTargetUserId !== targetUserId) throw new Error("Forbidden");
+    await assertCanAccessTarget(admin, actorUserId, targetUserId);
     if (draft.payment_status !== "paid") throw new Error("La declaración aún no está pagada");
 
     const { data: calc } = await admin
@@ -64,9 +85,9 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     const { data: profile } = await admin
-      .from("taxpayer_profiles").select("rfc").eq("user_id", userId).maybeSingle();
+      .from("taxpayer_profiles").select("rfc").eq("user_id", targetUserId).maybeSingle();
     const { data: prof } = await admin
-      .from("profiles").select("full_name").eq("user_id", userId).maybeSingle();
+      .from("profiles").select("full_name").eq("user_id", targetUserId).maybeSingle();
 
     // Folio + UUID + sello DEMO (deterministas por declaración)
     const folio = draft.cfdi_demo_folio
@@ -152,7 +173,7 @@ Deno.serve(async (req) => {
 
     const pdfBytes = await pdf.save();
 
-    const path = `${userId}/${draft.id}/cfdi-demo-${folio}.pdf`;
+    const path = `${targetUserId}/${draft.id}/cfdi-demo-${folio}.pdf`;
     const { error: upErr } = await admin.storage
       .from("cfdi-demos")
       .upload(path, pdfBytes, { contentType: "application/pdf", upsert: true });

@@ -108,7 +108,9 @@ export const useCalculateTaxPeriod = () => {
       overrides?: { total_income?: number; total_expenses?: number; taxable_base?: number } | null;
       notes?: string | null;
     }) => {
-      const { data, error } = await supabase.functions.invoke('calculate-tax-period', { body: input });
+      const { data, error } = await supabase.functions.invoke('calculate-tax-period', {
+        body: { ...input, target_user_id: effectiveUserId },
+      });
       if (error) throw error;
       if ((data as any)?.error) throw new Error((data as any).error);
       return data as TaxCalculation;
@@ -234,7 +236,9 @@ export const useGenerateDeclarationPdf = () => {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: { draft_id?: string; calculation_id?: string }) => {
-      const { data, error } = await supabase.functions.invoke('generate-declaration-pdf', { body: input });
+      const { data, error } = await supabase.functions.invoke('generate-declaration-pdf', {
+        body: { ...input, target_user_id: effectiveUserId },
+      });
       if (error) throw error;
       if ((data as any)?.error) throw new Error((data as any).error);
       return data as { draft: DeclarationDraft; pdf_url: string; pdf_storage_path: string };

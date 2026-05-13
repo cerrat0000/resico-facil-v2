@@ -4,6 +4,7 @@ import { useProxy } from '@/contexts/ProxyContext';
 import { getStripeEnvironment } from '@/lib/stripe';
 
 export const useCreateDeclarationPayment = () => {
+  const { effectiveUserId } = useProxy();
   return useMutation({
     mutationFn: async (input: { declarationId: string; returnUrl: string }) => {
       const { data, error } = await supabase.functions.invoke('create-declaration-payment', {
@@ -11,6 +12,7 @@ export const useCreateDeclarationPayment = () => {
           declarationId: input.declarationId,
           returnUrl: input.returnUrl,
           environment: getStripeEnvironment(),
+          target_user_id: effectiveUserId,
         },
       });
       if (error) throw error;
@@ -26,7 +28,7 @@ export const useGenerateCfdiDemo = () => {
   return useMutation({
     mutationFn: async (declarationId: string) => {
       const { data, error } = await supabase.functions.invoke('generate-cfdi-demo', {
-        body: { declarationId },
+        body: { declarationId, target_user_id: effectiveUserId },
       });
       if (error) throw error;
       if ((data as any)?.error) throw new Error((data as any).error);

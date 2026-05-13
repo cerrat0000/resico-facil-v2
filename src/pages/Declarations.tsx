@@ -28,7 +28,6 @@ import { toast } from "sonner";
 import {
   useCalculateTaxPeriod,
   useDeclarationDrafts,
-  useSaveDeclarationDraft,
   useTaxCalculations,
   useGenerateDeclarationPdf,
   useRefreshPdfSignedUrl,
@@ -102,7 +101,6 @@ const Declarations = () => {
   const { data: calculations, isLoading } = useTaxCalculations({ onlyCurrent: true });
   const { data: drafts } = useDeclarationDrafts();
   const calculate = useCalculateTaxPeriod();
-  const saveDraft = useSaveDeclarationDraft();
   const generatePdf = useGenerateDeclarationPdf();
   const refreshSigned = useRefreshPdfSignedUrl();
   const generateCfdi = useGenerateCfdiDemo();
@@ -163,14 +161,6 @@ const Declarations = () => {
     }
   };
 
-  const buildFormData = (c: TaxCalculation) => ({
-    total_income: c.total_income,
-    total_expenses: c.total_expenses,
-    taxable_base: c.taxable_base,
-    estimated_tax: c.estimated_tax,
-    applied_rate: c.applied_rate,
-  });
-
   const handleSaveChanges = async () => {
     if (!currentCalc) return;
     const i = Number(editIncome),
@@ -197,13 +187,6 @@ const Declarations = () => {
         setCurrentCalc(calc);
         toast.success("Impuesto recalculado");
       }
-      await saveDraft.mutateAsync({
-        calculation_id: calc.id,
-        period_year: calc.period_year,
-        period_month: calc.period_month,
-        form_data: buildFormData(calc),
-        status: "ready",
-      });
       await generatePdf.mutateAsync({ calculation_id: calc.id });
       toast.success("Declaración actualizada");
       setMode("home");
@@ -561,7 +544,7 @@ const Declarations = () => {
               size="lg"
               className="w-full h-14 text-base"
               onClick={handleSaveChanges}
-              disabled={savingAll || calculate.isPending || saveDraft.isPending || generatePdf.isPending}
+              disabled={savingAll || calculate.isPending || generatePdf.isPending}
             >
               {savingAll ? (
                 <>
