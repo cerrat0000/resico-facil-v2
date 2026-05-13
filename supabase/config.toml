@@ -1,0 +1,26 @@
+project_id = "ughooonecriiyyrgippu"
+
+[functions.create-checkout]
+verify_jwt = false
+
+[functions.payments-webhook]
+verify_jwt = false
+
+[functions.create-portal-session]
+verify_jwt = false
+
+[functions.create-declaration-payment]
+verify_jwt = false
+
+[functions.generate-cfdi-demo]
+verify_jwt = false
+
+[functions.admin-metrics]
+verify_jwt = false
+
+[functions.calculate-financial-score]
+verify_jwt = false
+
+[functions.generate-financial-approval-pdf]
+verify_jwt = false
+
